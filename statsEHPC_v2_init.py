@@ -335,7 +335,11 @@ for year, months in years_to_process_months.items():
                 
                 #data = sc.read.option("delimiter","|").csv(full_path, inferSchema=True, header=True)
                 
-                data = sc.read.option("delimiter","|").csv(f'{DATADIR}/{year}/{f}', inferSchema = True, header = True)
+                data = sc.read.option("delimiter","|")\
+                    .csv(f'{DATADIR}/{year}/{f}', 
+                         inferSchema = True, 
+                         header = True)\
+                    .select("ElapsedRaw", "Account", "AllocCPUS", "NNodes", "Partition", "State", "AllocTRES")
                 data = data\
                 .withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
                 .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED"))
@@ -347,6 +351,11 @@ for year, months in years_to_process_months.items():
                     nd = nd.union(data)
 
 tag = ""
+
+
+nd = nd.withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
+        .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED"))
+
 #nd.describe()
 #adicionar coluna cluster com valores ARM, AMD, GPU
 nd = nd.withColumn("cluster",
