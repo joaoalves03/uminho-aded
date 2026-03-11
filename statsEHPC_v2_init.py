@@ -1,6 +1,7 @@
-#!/usr/bin/env python
-# coding: utf-8
+
 import sys
+import subprocess
+from pathlib import Path
 
 import findspark
 import pyspark
@@ -12,22 +13,50 @@ import os
 from datetime import date, timedelta, datetime, time
 from dateutil.relativedelta import relativedelta
 
-#findspark.init('/opt/homebrew/Cellar/apache-spark/3.5.5')
+
+
+# # Code
 findspark.init()
 
-if __name__ == '__main__':
+# Adding the Global variables to make interchange between the local and the cluster environment easier
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--month", nargs='?', help="month")
-    parser.add_argument("-y", "--year", nargs='?', help="year")
-    parser.add_argument("-s", "--start", nargs='?', help="start day")
-    parser.add_argument("-o", "--outfile", nargs='?', help="outfile")
-    args = parser.parse_args()
 
-    DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports/2025'
-    OUTDIR  = '/projects/F202500010HPCVLABUMINHO/<YOURFOLDER>/DATA'
+CURRENT_WORK_DIRECTORY = os.getcwd()
 
-    params = {
+print(f"Current working directory: {CURRENT_WORK_DIRECTORY}")
+
+#DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports/2025'
+DATADIR = f'{CURRENT_WORK_DIRECTORY}/spark/datadir'
+OUTDIR  = f'{CURRENT_WORK_DIRECTORY}/spark/outdir'
+SPARK_EVENT_LOG_DIR = f'{CURRENT_WORK_DIRECTORY}/spark/sparkevents/local'
+
+for path in [DATADIR, OUTDIR, SPARK_EVENT_LOG_DIR]:
+    os.makedirs(path, exist_ok=True)
+    print(f"Ready: {path}")
+
+SPARK_UI_ACTIVE_MODE:bool = False
+
+
+# Code
+parser = argparse.ArgumentParser()
+parser.add_argument("-m", "--month", nargs='?', help="month")
+parser.add_argument("-y", "--year", nargs='?', help="year")
+parser.add_argument("-s", "--start", nargs='?', help="start day")
+parser.add_argument("-o", "--outfile", nargs='?', help="outfile")
+#args = parser.parse_args()
+args, unknown = parser.parse_known_args()
+
+
+"""
+In this argument parser will be added the function that 
+will try to convert the diferent dates to a specific range 
+of months and then read only the necessary ones and prune
+the uncessary  cols.
+"""
+
+
+
+params = {
         # numero de contas criadas no período
         #'newaccounts': 0,
 
@@ -165,241 +194,306 @@ if __name__ == '__main__':
 
     }
 
-    list_of_Months = list(calendar.month_name)[1:]
-    list_of_months_abr = list(calendar.month_abbr)[1:]
+ 
+# # Mapping All the data with the dates and firing up the file with apend mode:
 
-    today = datetime.now().date()
-    year = today.year
-    month_int = today.month -2
+list_of_Months = list(calendar.month_name)[1:]
+list_of_months_abr = list(calendar.month_abbr)[1:]
+today = datetime.now().date()
+year = today.year
+month_int = today.month -2
+month = list_of_months_abr[month_int]
+syear = date(year, 1, 1)
+
+print(f"MONTH : {month} {month_int} \n {list_of_months_abr}")
+
+if args.month != None:
+    month_int = list_of_months_abr.index(args.month)
     month = list_of_months_abr[month_int]
+    print(f"MONTH2 : {month} {month_int} ")
+    
+if args.year != None:
+    year = int(args.year)
     syear = date(year, 1, 1)
-    print(f"MONTH : {month} {month_int} \n {list_of_months_abr}")
-    if args.month != None:
-        month_int = list_of_months_abr.index(args.month)
-        month = list_of_months_abr[month_int]
-        print(f"MONTH2 : {month} {month_int} ")
+    
+if args.start != None:
+    syear = datetime.strptime(args.start, "%Y-%m-%d").date()
+    
+params['reportMonth'] = list_of_Months[month_int]
+params['reportYear'] = year
+smonth = date(year, month_int+1, 1)
+emonthd = smonth + relativedelta(months=1) + relativedelta(days=-1)
+#emonthd = date(year, month_int+2,1) - timedelta(days=1)
+emonth = smonth + relativedelta(months=1)
+#emonth = date(year, month_int + 2, 1)
 
-    if args.year != None:
-        year = int(args.year)
-        syear = date(year, 1, 1)
+if month_int < 3:
+    tmonth = emonth - relativedelta(months= month_int+1)
+else:
+    tmonth = emonth - relativedelta(months = 3)
+    
+print(f"smonth {smonth} -- emonthd {emonthd} -- emonth {emonth} -- tmonth {tmonth}")
+params['reportPeriod'] = f"{smonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
 
-    if args.start != None:
-        syear = datetime.strptime(args.start, "%Y-%m-%d").date()
+if month_int < 3:
+    params['reportPeriodTrimester'] = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+else:
+    params['reportPeriodTrimester'] = f"{tmonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
 
-    params['reportMonth'] = list_of_Months[month_int]
-    params['reportYear'] = year
+params['reportPeriodYear'] = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+params['ndays'] = (emonth-smonth).days
+params['ndaysTrimester'] = (emonth - tmonth).days
+params['ndaysYear'] = (emonth - syear).days
 
-    smonth = date(year, month_int+1, 1)
-    emonthd = smonth + relativedelta(months=1) + relativedelta(days=-1)
-    #emonthd = date(year, month_int+2,1) - timedelta(days=1)
-    emonth = smonth + relativedelta(months=1)
-    #emonth = date(year, month_int + 2, 1)
-    if month_int < 3:
-        tmonth = emonth - relativedelta(months= month_int+1)
-    else:
-        tmonth = emonth - relativedelta(months = 3)
+tag_month={
+    '': [month,],
+    'Trimester': None,
+    'Year': list_of_months_abr[:month_int+1]
+}
 
-    print(f"smonth {smonth} -- emonthd {emonthd} -- emonth {emonth} -- tmonth {tmonth}")
+if month_int < 3:
+    tag_month['Trimester'] = list_of_months_abr[:month_int+1]
+else:
+    tag_month['Trimester'] = list_of_months_abr[month_int-2:month_int+1]
+    
+outfilename = "params.tex"
 
-    params['reportPeriod'] = f"{smonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
-    if month_int < 3:
-        params['reportPeriodTrimester'] = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
-    else:
-        params['reportPeriodTrimester'] = f"{tmonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+if args.outfile != None:
+    outfilename = args.outfile
+    
+outfile_path = Path(f"{OUTDIR}/{outfilename}")  
 
-    params['reportPeriodYear'] = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+if not outfile_path.is_file():
+    outfile_path.parent.mkdir(parents=True, exist_ok=True)
+    outfile_path.write_text("", encoding='utf-8') 
 
-    params['ndays'] = (emonth-smonth).days
-    params['ndaysTrimester'] = (emonth - tmonth).days
-    params['ndaysYear'] = (emonth - syear).days
-
-
-    tag_month={
-        '': [month,],
-        'Trimester': None,
-        'Year': list_of_months_abr[:month_int+1]
-    }
-
-    if month_int < 3:
-        tag_month['Trimester'] = list_of_months_abr[:month_int+1]
-    else:
-        tag_month['Trimester'] = list_of_months_abr[month_int-2:month_int+1]
-
-
-
-    outfilename = "params.tex"
-    if args.outfile != None:
-        outfilename = args.outfile
-    wfile = open(f"{OUTDIR}/{outfilename}","w+")
+wfile = open(f"{outfile_path}","w+")
 
 
-
-    #
-    print("FIND SPARK")
-    print(findspark.find())
-
-    sc = (SparkSession.builder
-          .config("spark.eventLog.enabled", "true")
-          .config("executor.memory", "4g")
-          .config("num.executors", "4")
-          .config("spark.eventLog.dir", f"file:///projects/F202500010HPCVLABUMINHO/<YOURFOLDER>/spark-events")
-          .getOrCreate()
-          )
+# # Spark Part
 
 
-    #load all files from DATADIR starting with jobs_*
-    nd = None
-    for root, dirs, files in os.walk(DATADIR):
+# Extracting the data from params['reportPeriod'] = f"{smonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}":
+
+start_period: date = datetime.strptime(params['reportPeriod'].split(" - ")[0], "%d/%m/%Y").date()
+end_period: date = datetime.strptime(params['reportPeriod'].split(" - ")[1], "%d/%m/%Y").date()
+
+years_to_process_months: dict[int, list[str]] = {} #year: [months_to_process]
+
+current_iteration = date(start_period.year, start_period.month, 1)
+while current_iteration <= end_period:
+    
+    if current_iteration.year not in years_to_process_months:
+        years_to_process_months[current_iteration.year] = []
+        
+    m_abr:str = current_iteration.strftime('%b')
+    years_to_process_months[current_iteration.year].append(m_abr)
+    
+    current_iteration += relativedelta(months=1)
+
+"""
+print("PARAMS:")
+print(f"Start period: {start_period} -- End period: {end_period}")
+for year, months in years_to_process_months.items():
+    print(f"Year: {year} - Months: {months}")
+"""
+    
+
+print("FIND SPARK")
+print(findspark.find())
+
+sc = (SparkSession.builder
+      .master("local[*]")
+      .config("spark.eventLog.enabled", "true")
+      .config("spark.eventLog.dir", f"{SPARK_EVENT_LOG_DIR}")
+      #.config("executor.memory", "4g")
+      #.config("num.executors", "4")
+      .config("spark.jars.packages", "io.dataflint:dataflint-spark4_2.13:0.8.5")
+      .config("spark.plugins", "io.dataflint.spark.SparkDataflintPlugin")
+      
+      
+      .getOrCreate()
+      )
+
+
+
+nd = None
+for year, months in years_to_process_months.items():
+
+    for root, dirs, files in os.walk(f"{DATADIR}/{year}"):  
+    
         for f in files:
-            print(f)
-            if f.startswith('jobs'):
-                month = "_".join(f.split("_")[1:]).split(".")[0]
-                print(f"Process: {month} {DATADIR}/{f}")
-                data = sc.read.option("delimiter","|").csv(f'{DATADIR}/{f}', inferSchema = True, header = True)
+        
+            month_file = "_".join(f.split("_")[1:]).split(".")[0]
+        
+            print(f"Checking file: {f} for month: {month_file} in months: {months}")
+            
+            if month_file in months:
+                full_path = f"{DATADIR}/{year}/{f}"
+                
+                print(f"Process: {month_file} in {full_path}")
+                
+                #data = sc.read.option("delimiter","|").csv(full_path, inferSchema=True, header=True)
+                
+                data = sc.read.option("delimiter","|").csv(f'{DATADIR}/{year}/{f}', inferSchema = True, header = True)
                 data = data\
-                    .withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
-                    .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED"))
+                .withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
+                .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED"))
                 data = data.withColumn('Period', F.lit(month))
-                if nd == None:
+                
+                if nd is None:
                     nd = data
                 else:
                     nd = nd.union(data)
-    tag = ""
-    #nd.describe()
-    #adicionar coluna cluster com valores ARM, AMD, GPU
-    nd = nd.withColumn("cluster",
-        F.when(
-            F.col('Partition').contains("arm"), "ARM"
+
+tag = ""
+#nd.describe()
+#adicionar coluna cluster com valores ARM, AMD, GPU
+nd = nd.withColumn("cluster",
+    F.when(
+        F.col('Partition').contains("arm"), "ARM"
+    ).otherwise(
+        F.when( F.col('Partition').contains("a100"), "GPU"
         ).otherwise(
-            F.when( F.col('Partition').contains("a100"), "GPU"
+        "AMD"
+        )
+    )
+)
+
+#Adicionar coluna Agency com valores FCT, EHPC, LOCAL
+nd = nd.withColumn("Agency",
+                    F.when(
+                        F.col('Account').startswith("f"), "FCT"
+                    ).otherwise(
+                        F.when(
+                            F.col('Account').startswith("ee"), "EHPC"
+                        ).otherwise("LOCAL")
+                    ))
+
+#Adicionar coluna NNodes com o numero de nodos alocados por causa de os nó GPU não ser exclusivo
+nd = nd.withColumn("OldVNodes", F.when(
+         F.col("Partition").contains("a100"),
+            F.when(
+                F.col('AllocCPUS') % 32 == 0,
+                        (F.cast(int , F.col('AllocCPUS')/32))
+                ).otherwise(
+                        (F.cast(int , F.col('AllocCPUS')/32)+1))
+    ).otherwise(F.col("NNodes")))
+
+#Forma do calcular os nós usados nos jobs com GPU
+nd = nd.withColumn("VNodes", F.when(
+         F.col("Partition").contains("a100"),
+            F.when(
+                F.col("AllocTRES").isNull(),
+                    F.col("NNodes")
             ).otherwise(
-            "AMD"
+                    F.when(F.col("AllocTRES").rlike( r"gres/gpu=(\d+)") ,
+                        F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1)
+                    ).otherwise(
+                        F.col("NNodes")*4 #antes de ter este valor usava todo o nó
+                    )
             )
+         ).otherwise(
+                F.col("NNodes")
         )
     )
 
-    #Adicionar coluna Agency com valores FCT, EHPC, LOCAL
-    nd = nd.withColumn("Agency",
-                        F.when(
-                            F.col('Account').startswith("f"), "FCT"
-                        ).otherwise(
-                            F.when(
-                                F.col('Account').startswith("ee"), "EHPC"
-                            ).otherwise("LOCAL")
-                        ))
+#Adicionar coluna totalJobSeconds = ElapsedRaw * NNodes
+nd = nd.withColumn("totalJobSeconds",
+                   (F.col('ElapsedRaw')) * F.col('VNodes')
+                   )
 
-    #Adicionar coluna NNodes com o numero de nodos alocados por causa de os nó GPU não ser exclusivo
-    nd = nd.withColumn("OldVNodes", F.when(
-             F.col("Partition").contains("a100"),
-                F.when(
-                    F.col('AllocCPUS') % 32 == 0,
-                            (F.cast(int , F.col('AllocCPUS')/32))
-                    ).otherwise(
-                            (F.cast(int , F.col('AllocCPUS')/32)+1))
-        ).otherwise(F.col("NNodes")))
+#                   F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1))
+#nd = nd.withColumn("totalJobSeconds",
+#                   (F.col('ElapsedRaw') ) * F.col('NNodes')
+#                   )
+#nd.show()
+cl = ['ARM', 'AMD', 'GPU']
+nd.groupby('EState').count().show()
+print(f"1. {nd.count()}")
+nd.show()
 
-    #Forma do calcular os nós usados nos jobs com GPU
-    nd = nd.withColumn("VNodes", F.when(
-             F.col("Partition").contains("a100"),
-                F.when(
-                    F.col("AllocTRES").isNull(),
-                        F.col("NNodes")
-                ).otherwise(
-                        F.when(F.col("AllocTRES").rlike( r"gres/gpu=(\d+)") ,
-                            F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1)
-                        ).otherwise(
-                            F.col("NNodes")*4 #antes de ter este valor usava todo o nó
-                        )
-                )
-             ).otherwise(
-                    F.col("NNodes")
-            )
-        )
-
-    #Adicionar coluna totalJobSeconds = ElapsedRaw * NNodes
-    nd = nd.withColumn("totalJobSeconds",
-                       (F.col('ElapsedRaw')) * F.col('VNodes')
-                       )
-
-    #                   F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1))
-    #nd = nd.withColumn("totalJobSeconds",
-    #                   (F.col('ElapsedRaw') ) * F.col('NNodes')
-    #                   )
-    #nd.show()
-    cl = ['ARM', 'AMD', 'GPU']
-    nd.groupby('EState').count().show()
-    print(f"1. {nd.count()}")
-    nd.show()
+ 
+# # Write to the file:
 
 
-    for tag,months in tag_month.items():
-        print(f"{tag} {months}")
-        hours = dict()
-        jobs = dict()
-        completed = nd.filter(F.col('Period').isin(months)).groupby( 'COMPLETED', 'cluster').count().collect()
-        msg =''
-        for row in completed:
-            print(f"ROW: {row}")
-            if row.COMPLETED == 'COMPLETED':
-                params[f"{row.cluster.lower()}CompletedJobs{tag}"] = row.asDict()['count']
-                msg = f"\def\{row.cluster.lower()}CompletedJobs{tag}{{{row.asDict()['count']}}}\n"
-            else:
-                params[f"{row.cluster.lower()}FailedJobs{tag}"] = row.asDict()['count']
-                msg = f"\def\{row.cluster.lower()}FailedJobs{tag}{{{row.asDict()['count']}}}\n"
-            print(f"MSG: {tag} {msg}")
-            #x=wfile.write(msg)
-            #print(f"write {x}")
-        #ignoring local consumed hours
-        for c in cl:
-            #hours[c] = nd.filter(F.col('Period').isin(months)).groupby("cluster").sum().filter(F.col("cluster") == c).collect()[0].asDict()['sum(ElapsedRaw)']
-            hours[c] = \
-            nd.filter(F.col("Agency") != 'LOCAL').filter(F.col('Period').isin(months))\
-                .groupby("cluster").sum().filter(F.col("cluster") == c)\
-                .collect()[0].asDict()['sum(totalJobSeconds)']
-            print(f" {months} HOURS {c} {hours[c]}")
-        #ignoring local consumed hours
-        for row in nd.filter(F.col("Agency") != 'LOCAL').filter(F.col('Period').isin(months))\
-                .groupby("cluster").count().collect():
-            print(f"ROW jobs: {row}")
-            r = row.asDict()
-            jobs[r['cluster']] = r['count']
+for tag,months in tag_month.items():
+    print(f"{tag} {months}")
+    hours = dict()
+    jobs = dict()
+    completed = nd.filter(F.col('Period').isin(months)).groupby( 'COMPLETED', 'cluster').count().collect()
+    msg =''
+    for row in completed:
+        print(f"ROW: {row}")
+        if row.COMPLETED == 'COMPLETED':
+            params[f"{row.cluster.lower()}CompletedJobs{tag}"] = row.asDict()['count']
+            msg = f"\def\{row.cluster.lower()}CompletedJobs{tag}{{{row.asDict()['count']}}}\n"
+        else:
+            params[f"{row.cluster.lower()}FailedJobs{tag}"] = row.asDict()['count']
+            msg = f"\def\{row.cluster.lower()}FailedJobs{tag}{{{row.asDict()['count']}}}\n"
+        print(f"MSG: {tag} {msg}")
+        #x=wfile.write(msg)
+        #print(f"write {x}")
+    #ignoring local consumed hours
+    
+    for c in cl:
+        #hours[c] = nd.filter(F.col('Period').isin(months)).groupby("cluster").sum().filter(F.col("cluster") == c).collect()[0].asDict()['sum(ElapsedRaw)']
+        hours[c] = \
+        nd.filter(F.col("Agency") != 'LOCAL').filter(F.col('Period').isin(months))\
+            .groupby("cluster").sum().filter(F.col("cluster") == c)\
+            .collect()[0].asDict()['sum(totalJobSeconds)']
+        print(f" {months} HOURS {c} {hours[c]}")
+        
+    #ignoring local consumed hours
+    for row in nd.filter(F.col("Agency") != 'LOCAL').filter(F.col('Period').isin(months))\
+            .groupby("cluster").count().collect():
+        print(f"ROW jobs: {row}")
+        r = row.asDict()
+        jobs[r['cluster']] = r['count']
+    print(f"JOBS: {jobs}")
+    
+    for k, v in hours.items():
+        params[f"{k.lower()}usedhours{tag}"] = v / 3600
+        msg = f"\def\{k.lower()}usedhours{tag}{{{v / 3600}}}\n"
+        print(f"HOURS {tag} {msg}")
+        #x = wfile.write(msg)
+        #print(f"write {x}")
+        
+    for k, v in jobs.items():
+        params[f"{k.lower()}Jobs{tag}"] = v
+        msg = f"\def\{k.lower()}Jobs{tag}{{{v}}}\n"
+        print(f"JOBS {tag} {msg}")
+        #x = wfile.write(msg)
+        #print(f"write {x}")
+        
+    for row in (nd.filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster'])
+            .count().orderBy('Agency').filter(F.col("Agency") == 'EHPC').collect()):
+        params[f"{row.cluster.lower()}JobsEuroHPC{tag}"] = row.asDict()['count']
+        msg = f"\def\{row.cluster.lower()}JobsEuroHPC{tag}{{{row.asDict()['count']}}}\n"
+        print(msg)
+        #wfile.write(msg)
+        
+    rows = (nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months))
+            .groupby(['Agency', 'cluster']).sum().collect())
+    for row in rows:
+    #for row in nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster']).sum().collect():
+        #print(f"EHPC {row} --> {row.cluster.lower()}usedhoursEuroHPC{tag}")
+        params[f"{row.cluster.lower()}usedhoursEuroHPC{tag}"] = row.asDict()['sum(totalJobSeconds)'] / 3600
+        msg = f"\def\{row.cluster.lower()}usedhoursEuroHPC{tag}{{{row.asDict()['sum(totalJobSeconds)'] / 3600}}}\n"
+        print(msg)
+        #wfile.write(msg)
+        
+#wfile.write("%%%%%%%%%%%%%%%%%%%%%%%%\n")
+for k, v in params.items():
+    msg = f"\def\{k}{{{v}}}\n"
+    wfile.write(msg)
+wfile.close()
 
-        print(f"JOBS: {jobs}")
 
-        for k, v in hours.items():
-            params[f"{k.lower()}usedhours{tag}"] = v / 3600
-            msg = f"\def\{k.lower()}usedhours{tag}{{{v / 3600}}}\n"
-            print(f"HOURS {tag} {msg}")
-            #x = wfile.write(msg)
-            #print(f"write {x}")
-        for k, v in jobs.items():
-            params[f"{k.lower()}Jobs{tag}"] = v
-            msg = f"\def\{k.lower()}Jobs{tag}{{{v}}}\n"
-            print(f"JOBS {tag} {msg}")
-            #x = wfile.write(msg)
-            #print(f"write {x}")
+print("SPARK UI ACTIVE MODE")
+print(f"SPARK UI URL: {sc.sparkContext.uiWebUrl}")
 
-        for row in (nd.filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster'])
-                .count().orderBy('Agency').filter(F.col("Agency") == 'EHPC').collect()):
-            params[f"{row.cluster.lower()}JobsEuroHPC{tag}"] = row.asDict()['count']
-            msg = f"\def\{row.cluster.lower()}JobsEuroHPC{tag}{{{row.asDict()['count']}}}\n"
-            print(msg)
-            #wfile.write(msg)
+if SPARK_UI_ACTIVE_MODE:
+    input("Press Enter to exit...")
 
 
-        rows = (nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months))
-                .groupby(['Agency', 'cluster']).sum().collect())
-
-        for row in rows:
-        #for row in nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster']).sum().collect():
-            #print(f"EHPC {row} --> {row.cluster.lower()}usedhoursEuroHPC{tag}")
-            params[f"{row.cluster.lower()}usedhoursEuroHPC{tag}"] = row.asDict()['sum(totalJobSeconds)'] / 3600
-            msg = f"\def\{row.cluster.lower()}usedhoursEuroHPC{tag}{{{row.asDict()['sum(totalJobSeconds)'] / 3600}}}\n"
-            print(msg)
-            #wfile.write(msg)
-
-    #wfile.write("%%%%%%%%%%%%%%%%%%%%%%%%\n")
-    for k, v in params.items():
-        msg = f"\def\{k}{{{v}}}\n"
-        wfile.write(msg)
-    wfile.close()

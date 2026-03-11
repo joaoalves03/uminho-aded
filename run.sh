@@ -15,4 +15,4 @@ scontrol show hostname $SLURM_NODELIST
 
 source .venv/bin/activate
 
-python statsEHPC_v2_init.py -m Jan
+python statsEHPC_v2_init.py -m Jan -y 2025
