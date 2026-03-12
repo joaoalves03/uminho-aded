@@ -310,8 +310,6 @@ sc = (SparkSession.builder
       #.config("num.executors", "4")
       .config("spark.jars.packages", "io.dataflint:dataflint-spark4_2.13:0.8.5")
       .config("spark.plugins", "io.dataflint.spark.SparkDataflintPlugin")
-      
-      
       .getOrCreate()
       )
 
@@ -340,9 +338,7 @@ for year, months in years_to_process_months.items():
                          inferSchema = True, 
                          header = True)\
                     .select("ElapsedRaw", "Account", "AllocCPUS", "NNodes", "Partition", "State", "AllocTRES")
-                data = data\
-                .withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
-                .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED"))
+                
                 data = data.withColumn('Period', F.lit(month))
                 
                 if nd is None:
@@ -352,75 +348,62 @@ for year, months in years_to_process_months.items():
 
 tag = ""
 
-
-nd = nd.withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
-        .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED"))
-
 #nd.describe()
 #adicionar coluna cluster com valores ARM, AMD, GPU
-nd = nd.withColumn("cluster",
-    F.when(
-        F.col('Partition').contains("arm"), "ARM"
-    ).otherwise(
-        F.when( F.col('Partition').contains("a100"), "GPU"
-        ).otherwise(
-        "AMD"
-        )
-    )
-)
-
 #Adicionar coluna Agency com valores FCT, EHPC, LOCAL
-nd = nd.withColumn("Agency",
+#Adicionar coluna NNodes com o numero de nodos alocados por causa de os nó GPU não ser exclusivo
+#Forma do calcular os nós usados nos jobs com GPU
+#Adicionar coluna totalJobSeconds = ElapsedRaw * NNodes
+nd = nd.withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
+        .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED")) \
+        .withColumn("cluster",
+                    F.when(
+                        F.col('Partition').contains("arm"), "ARM"
+                    ).otherwise(
+                        F.when( F.col('Partition').contains("a100"), "GPU"
+                    ).otherwise("AMD")
+                    )
+        ) \
+        .withColumn("Agency",
                     F.when(
                         F.col('Account').startswith("f"), "FCT"
                     ).otherwise(
                         F.when(
                             F.col('Account').startswith("ee"), "EHPC"
-                        ).otherwise("LOCAL")
-                    ))
-
-#Adicionar coluna NNodes com o numero de nodos alocados por causa de os nó GPU não ser exclusivo
-nd = nd.withColumn("OldVNodes", F.when(
-         F.col("Partition").contains("a100"),
-            F.when(
-                F.col('AllocCPUS') % 32 == 0,
-                        (F.cast(int , F.col('AllocCPUS')/32))
-                ).otherwise(
-                        (F.cast(int , F.col('AllocCPUS')/32)+1))
-    ).otherwise(F.col("NNodes")))
-
-#Forma do calcular os nós usados nos jobs com GPU
-nd = nd.withColumn("VNodes", F.when(
-         F.col("Partition").contains("a100"),
-            F.when(
-                F.col("AllocTRES").isNull(),
-                    F.col("NNodes")
-            ).otherwise(
-                    F.when(F.col("AllocTRES").rlike( r"gres/gpu=(\d+)") ,
-                        F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1)
-                    ).otherwise(
-                        F.col("NNodes")*4 #antes de ter este valor usava todo o nó
-                    )
-            )
-         ).otherwise(
-                F.col("NNodes")
-        )
-    )
-
-#Adicionar coluna totalJobSeconds = ElapsedRaw * NNodes
-nd = nd.withColumn("totalJobSeconds",
+                    ).otherwise("LOCAL")
+                    )) \
+        .withColumn("OldVNodes", F.when(
+                    F.col("Partition").contains("a100"),
+                       F.when(
+                           F.col('AllocCPUS') % 32 == 0,
+                                   (F.cast(int , F.col('AllocCPUS')/32))
+                            ).otherwise(
+                                   (F.cast(int , F.col('AllocCPUS')/32)+1))
+                            ).otherwise(F.col("NNodes"))) \
+        .withColumn("VNodes", F.when(
+                    F.col("Partition").contains("a100"),
+                       F.when(
+                           F.col("AllocTRES").isNull(),
+                               F.col("NNodes")
+                       ).otherwise(
+                               F.when(F.col("AllocTRES").rlike( r"gres/gpu=(\d+)") ,
+                                   F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1)
+                               ).otherwise(
+                                   F.col("NNodes")*4 #antes de ter este valor usava todo o nó
+                        ))).otherwise(F.col("NNodes"))
+                        ) \
+        .withColumn("totalJobSeconds",
                    (F.col('ElapsedRaw')) * F.col('VNodes')
                    )
+        
+#nd.groupby('EState').count().show()
 
-#                   F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1))
-#nd = nd.withColumn("totalJobSeconds",
-#                   (F.col('ElapsedRaw') ) * F.col('NNodes')
-#                   )
-#nd.show()
-cl = ['ARM', 'AMD', 'GPU']
-nd.groupby('EState').count().show()
+
+
 print(f"1. {nd.count()}")
 nd.show()
+
+cl = ['ARM', 'AMD', 'GPU']
 
  
 # # Write to the file:
@@ -441,8 +424,6 @@ for tag,months in tag_month.items():
             params[f"{row.cluster.lower()}FailedJobs{tag}"] = row.asDict()['count']
             msg = f"\def\{row.cluster.lower()}FailedJobs{tag}{{{row.asDict()['count']}}}\n"
         print(f"MSG: {tag} {msg}")
-        #x=wfile.write(msg)
-        #print(f"write {x}")
     #ignoring local consumed hours
     
     for c in cl:
@@ -465,22 +446,17 @@ for tag,months in tag_month.items():
         params[f"{k.lower()}usedhours{tag}"] = v / 3600
         msg = f"\def\{k.lower()}usedhours{tag}{{{v / 3600}}}\n"
         print(f"HOURS {tag} {msg}")
-        #x = wfile.write(msg)
-        #print(f"write {x}")
         
     for k, v in jobs.items():
         params[f"{k.lower()}Jobs{tag}"] = v
         msg = f"\def\{k.lower()}Jobs{tag}{{{v}}}\n"
         print(f"JOBS {tag} {msg}")
-        #x = wfile.write(msg)
-        #print(f"write {x}")
         
     for row in (nd.filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster'])
             .count().orderBy('Agency').filter(F.col("Agency") == 'EHPC').collect()):
         params[f"{row.cluster.lower()}JobsEuroHPC{tag}"] = row.asDict()['count']
         msg = f"\def\{row.cluster.lower()}JobsEuroHPC{tag}{{{row.asDict()['count']}}}\n"
         print(msg)
-        #wfile.write(msg)
         
     rows = (nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months))
             .groupby(['Agency', 'cluster']).sum().collect())
@@ -490,9 +466,11 @@ for tag,months in tag_month.items():
         params[f"{row.cluster.lower()}usedhoursEuroHPC{tag}"] = row.asDict()['sum(totalJobSeconds)'] / 3600
         msg = f"\def\{row.cluster.lower()}usedhoursEuroHPC{tag}{{{row.asDict()['sum(totalJobSeconds)'] / 3600}}}\n"
         print(msg)
-        #wfile.write(msg)
         
 #wfile.write("%%%%%%%%%%%%%%%%%%%%%%%%\n")
+
+
+## This is the real file writing:
 for k, v in params.items():
     msg = f"\def\{k}{{{v}}}\n"
     wfile.write(msg)
