@@ -25,7 +25,7 @@ CURRENT_WORK_DIRECTORY = os.getcwd()
 
 print(f"Current working directory: {CURRENT_WORK_DIRECTORY}")
 
-#DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports/2025'
+#DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports'
 DATADIR = f'{CURRENT_WORK_DIRECTORY}/spark/datadir'
 OUTDIR  = f'{CURRENT_WORK_DIRECTORY}/spark/outdir'
 SPARK_EVENT_LOG_DIR = f'{CURRENT_WORK_DIRECTORY}/spark/sparkevents/local'
@@ -314,7 +314,6 @@ sc = (SparkSession.builder
       )
 
 
-
 nd = None
 for year, months in years_to_process_months.items():
 
@@ -354,48 +353,70 @@ tag = ""
 #Adicionar coluna NNodes com o numero de nodos alocados por causa de os nó GPU não ser exclusivo
 #Forma do calcular os nós usados nos jobs com GPU
 #Adicionar coluna totalJobSeconds = ElapsedRaw * NNodes
-nd = nd.withColumn('EState', F.regexp_replace(F.col('State'), "CANCELLED(.*)", "CANCELLED")) \
-        .withColumn('COMPLETED', F.when( F.col('State') == 'COMPLETED' , "COMPLETED").otherwise("FAILED")) \
-        .withColumn("cluster",
-                    F.when(
-                        F.col('Partition').contains("arm"), "ARM"
-                    ).otherwise(
-                        F.when( F.col('Partition').contains("a100"), "GPU"
-                    ).otherwise("AMD")
-                    )
-        ) \
-        .withColumn("Agency",
-                    F.when(
-                        F.col('Account').startswith("f"), "FCT"
-                    ).otherwise(
-                        F.when(
-                            F.col('Account').startswith("ee"), "EHPC"
-                    ).otherwise("LOCAL")
-                    )) \
-        .withColumn("OldVNodes", F.when(
-                    F.col("Partition").contains("a100"),
-                       F.when(
-                           F.col('AllocCPUS') % 32 == 0,
-                                   (F.cast(int , F.col('AllocCPUS')/32))
-                            ).otherwise(
-                                   (F.cast(int , F.col('AllocCPUS')/32)+1))
-                            ).otherwise(F.col("NNodes"))) \
-        .withColumn("VNodes", F.when(
-                    F.col("Partition").contains("a100"),
-                       F.when(
-                           F.col("AllocTRES").isNull(),
-                               F.col("NNodes")
-                       ).otherwise(
-                               F.when(F.col("AllocTRES").rlike( r"gres/gpu=(\d+)") ,
-                                   F.regexp_extract(F.col("AllocTRES"), r"gres/gpu=(\d+)", 1)
-                               ).otherwise(
-                                   F.col("NNodes")*4 #antes de ter este valor usava todo o nó
-                        ))).otherwise(F.col("NNodes"))
-                        ) \
-        .withColumn("totalJobSeconds",
-                   (F.col('ElapsedRaw')) * F.col('VNodes')
-                   )
-        
+
+
+# SQL Version:
+nd.createOrReplaceTempView("prune_data")
+
+query = """--sql
+    WITH calculated_cols AS (
+        SELECT 
+            -- Original Columns
+            ElapsedRaw, Account, AllocCPUS, NNodes, Partition, State, AllocTRES, Period,
+            
+            -- EState: Cleanup the CANCELLED state suffix
+            regexp_replace(State, 'CANCELLED(.*)', 'CANCELLED') AS EState,
+            
+            -- COMPLETED: Binary status flag
+            CASE 
+                WHEN State = 'COMPLETED' THEN 'COMPLETED' 
+                ELSE 'FAILED' 
+            END AS COMPLETED,
+            
+            -- cluster: Partition type mapping
+            CASE 
+                WHEN Partition LIKE '%arm%' THEN 'ARM'
+                WHEN Partition LIKE '%a100%' THEN 'GPU'
+                ELSE 'AMD' 
+            END AS cluster,
+            
+            -- Agency: Account and funding source mapping
+            CASE 
+                WHEN Account LIKE 'f%' THEN 'FCT'
+                WHEN Account LIKE 'ee%' THEN 'EHPC'
+                ELSE 'LOCAL' 
+            END AS Agency,
+            
+            -- OldVNodes: Rounding logic for CPU/32 ratio
+            CASE 
+                WHEN Partition LIKE '%a100%' THEN CEIL(AllocCPUS / 32)
+                ELSE NNodes 
+            END AS OldVNodes,
+            
+            -- VNodes: Complex GPU allocation logic (gres/gpu extraction)
+            CASE 
+                WHEN Partition LIKE '%a100%' THEN 
+                    CASE 
+                        WHEN AllocTRES IS NULL THEN NNodes
+                        WHEN AllocTRES RLIKE 'gres/gpu=([0-9]+)' 
+                            THEN CAST(regexp_extract(AllocTRES, 'gres/gpu=([0-9]+)', 1) AS INT)
+                        ELSE NNodes * 4 
+                    END
+                ELSE NNodes 
+            END AS VNodes
+        FROM prune_data
+    )
+    SELECT 
+        *, 
+        -- Final calculation using the virtual VNodes column defined in the CTE
+        (ElapsedRaw * VNodes) AS totalJobSeconds
+    FROM calculated_cols
+"""
+
+
+## df_result = sc.sql(query)
+nd = sc.sql(query)
+ 
 #nd.groupby('EState').count().show()
 
 
