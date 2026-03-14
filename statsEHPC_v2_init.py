@@ -1,507 +1,471 @@
-
 import sys
-import subprocess
-from pathlib import Path
-
-import findspark
-import pyspark
-from pyspark.sql import SparkSession
-import pyspark.sql.functions as F
+import os
 import argparse
 import calendar
-import os
-from datetime import date, timedelta, datetime, time
+from pathlib import Path
+from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
+from collections import OrderedDict
 
-
-
-# # Code
+import findspark
 findspark.init()
 
-# Adding the Global variables to make interchange between the local and the cluster environment easier
+from pyspark.sql import SparkSession
+import pyspark.sql.functions as F
+import pyspark.sql.types as T
 
-
-CURRENT_WORK_DIRECTORY = os.getcwd()
-
-print(f"Current working directory: {CURRENT_WORK_DIRECTORY}")
-
+# Directories 
+CWD     = os.getcwd()
 #DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports'
-DATADIR = f'{CURRENT_WORK_DIRECTORY}/spark/datadir'
-OUTDIR  = f'{CURRENT_WORK_DIRECTORY}/spark/outdir'
-SPARK_EVENT_LOG_DIR = f'{CURRENT_WORK_DIRECTORY}/spark/sparkevents/local'
-
-for path in [DATADIR, OUTDIR, SPARK_EVENT_LOG_DIR]:
-    os.makedirs(path, exist_ok=True)
-    print(f"Ready: {path}")
-
-SPARK_UI_ACTIVE_MODE:bool = False
+DATADIR = f"{CWD}/spark/datadir"
+OUTDIR  = f"{CWD}/spark/outdir"
+SPARK_EVENT_LOG_DIR = f"{CWD}/spark/sparkevents/local"
 
 
-# Code
+for p in [DATADIR, OUTDIR, SPARK_EVENT_LOG_DIR]:
+    os.makedirs(p, exist_ok=True)
+
+SPARK_UI_ACTIVE_MODE: bool = False
+
+# Args
 parser = argparse.ArgumentParser()
-parser.add_argument("-m", "--month", nargs='?', help="month")
-parser.add_argument("-y", "--year", nargs='?', help="year")
-parser.add_argument("-s", "--start", nargs='?', help="start day")
-parser.add_argument("-o", "--outfile", nargs='?', help="outfile")
-#args = parser.parse_args()
-args, unknown = parser.parse_known_args()
+parser.add_argument("-m", "--month",   nargs="?", help="month abbr e.g. Mar")
+parser.add_argument("-y", "--year",    nargs="?", help="year e.g. 2025")
+parser.add_argument("-s", "--start",   nargs="?", help="start YYYY-MM-DD")
+parser.add_argument("-o", "--outfile", nargs="?", help="output filename")
+args, _ = parser.parse_known_args()
 
+# Logic of reading the args to filter then the desiged files will be open and processed.
+MONTHS_FULL = list(calendar.month_name)[1:]
+MONTHS_ABR  = list(calendar.month_abbr)[1:]
 
-"""
-In this argument parser will be added the function that 
-will try to convert the diferent dates to a specific range 
-of months and then read only the necessary ones and prune
-the uncessary  cols.
-"""
+today     = datetime.now().date()
+year      = today.year
+month_int = today.month - 2
+month     = MONTHS_ABR[month_int]
+syear     = date(year, 1, 1)
 
-
-
-params = {
-        # numero de contas criadas no período
-        #'newaccounts': 0,
-
-        # numero de projetos euroHPC criadas no período
-        #'neweurohpcprojecs': 0,
-        # numero de projetos nacionais criadas no período
-        #'newnationalprojects': 0,
-
-        'reportPeriod': 0,
-        'reportPeriodTrimester': 0,
-        'reportPeriodYear': 0,
-        # mes do report
-        'reportMonth': 0,
-        # ano do report
-        'reportYear': 0,
-
-        # definicoes da maquina
-        'armnodes': 1632,
-        'amdnodes': 500,
-        'gpunodes': 132,
-
-        'percentaviail': 0.8,
-        'eurohpcavail': 0.35,
-
-        'ndays': 0,
-
-        'armusedhours': 0,
-        'amdusedhours': 0,
-        'gpuusedhours': 0,
-
-        # numero de horas utilizadas pelos jobs de projetos eurohpc
-        'gpuusedhoursEuroHPC': 0,
-        'amdusedhoursEuroHPC': 0,
-        'armusedhoursEuroHPC': 0,
-
-        # numero de jobs
-        'armJobs': 0,
-        'amdJobs': 0,
-        'gpuJobs': 0,
-
-        # numero de jobs concluidos com sucesso
-        # numero de jobs que falharam
-        'gpuCompletedJobs': 0,
-        'gpuFailedJobs': 0,
-        'armCompletedJobs': 0,
-        'amdCompletedJobs': 0,
-        'amdFailedJobs': 0,
-        'armFailedJobs': 0,
-
-        # numero de jobs concluidos com sucesso de projetos EuroHPC
-        'gpuJobsEuroHPC': 0,
-        'amdJobsEuroHPC': 0,
-        'armJobsEuroHPC': 0,
-
-        'ndaysTrimester': 0,
-
-        'gpuCompletedJobsTrimester': 0,
-        'gpuFailedJobsTrimester': 0,
-        'armCompletedJobsTrimester': 0,
-        'amdCompletedJobsTrimester': 0,
-        'amdFailedJobsTrimester': 0,
-        'armFailedJobsTrimester': 0,
-
-        'armusedhoursTrimester': 0,
-        'amdusedhoursTrimester': 0,
-        'gpuusedhoursTrimester': 0,
-        'armJobsTrimester': 0,
-        'amdJobsTrimester': 0,
-        'gpuJobsTrimester': 0,
-
-        'gpuusedhoursEuroHPCTrimester': 0,
-        'amdusedhoursEuroHPCTrimester': 0,
-        'armusedhoursEuroHPCTrimester': 0,
-
-        'armusedhoursTrimester': 0,
-        'amdusedhoursTrimester': 0,
-        'gpuusedhoursTrimester': 0,
-
-        'gpuJobsEuroHPCTrimester': 0,
-        'amdJobsEuroHPCTrimester': 0,
-        'armJobsEuroHPCTrimester': 0,
-
-        # numero de horas utilizadas pelos jobs de projetos eurohpc
-        # 'armusedhoursEuroHPCTrimester': 0,
-        # 'amdusedhoursEuroHPCTrimester': 0,
-        # 'gpuusedhoursEuroHPCTrimester': 0,
-
-        # numero de jobs
-        # 'gpuJobsTrimester{ 6515 }
-        # 'armJobsTrimester{ 18821 }
-        # 'amdJobsTrimester{ 83036 }
-        # numero de jobs concluidos com sucesso
-        # 'gpuCompletedJobsTrimester{ 4122 }
-        # 'armCompletedJobsTrimester{ 15498 }
-        # 'amdCompletedJobsTrimester{ 59670 }
-        # numero de jobs que falharam
-        # 'gpuFailedJobsTrimester{ 671 }
-        # 'armFailedJobsTrimester{ 1372 }
-        # 'amdFailedJobsTrimester{ 12715 }
-
-        # numero de jobs concluidos com sucesso de projetos EuroHPC
-        # 'armuJobsEuroHPCTrimester{ 94 }
-        ##'amdJobsEuroHPCTrimester{ 694 }
-        # 'gpuJobsEuroHPCTrimester{ 144 }
-
-        'ndaysYear': 0,
-
-        'gpuCompletedJobsYear': 0,
-        'gpuFailedJobsYear': 0,
-        'armCompletedJobsYear': 0,
-        'amdCompletedJobsYear': 0,
-        'amdFailedJobsYear': 0,
-        'armFailedJobsYear': 0,
-
-        'armusedhoursYear': 0,
-        'amdusedhoursYear': 0,
-        'gpuusedhoursYear': 0,
-        'armJobsYear': 0,
-        'amdJobsYear': 0,
-        'gpuJobsYear': 0,
-
-        'gpuJobsEuroHPCYear': 0,
-        'amdJobsEuroHPCYear': 0,
-        'armJobsEuroHPCYear': 0,
-
-        'gpuusedhoursEuroHPCYear': 0,
-        'amdusedhoursEuroHPCYear': 0,
-        'armusedhoursEuroHPCYear': 0,
-
-
-
-        'monthhours': '{\inteval{\\ndays * 24}}',
-        'hoursTrimester': '{\inteval{\\ndaysTrimester * 24}}',
-        'hoursYear': '{\inteval{\\ndaysYear * 24}}'
-
-    }
-
- 
-# # Mapping All the data with the dates and firing up the file with apend mode:
-
-list_of_Months = list(calendar.month_name)[1:]
-list_of_months_abr = list(calendar.month_abbr)[1:]
-today = datetime.now().date()
-year = today.year
-month_int = today.month -2
-month = list_of_months_abr[month_int]
-syear = date(year, 1, 1)
-
-print(f"MONTH : {month} {month_int} \n {list_of_months_abr}")
-
-if args.month != None:
-    month_int = list_of_months_abr.index(args.month)
-    month = list_of_months_abr[month_int]
-    print(f"MONTH2 : {month} {month_int} ")
-    
-if args.year != None:
-    year = int(args.year)
+if args.month is not None:
+    month_int = MONTHS_ABR.index(args.month)
+    month     = MONTHS_ABR[month_int]
+if args.year is not None:
+    year  = int(args.year)
     syear = date(year, 1, 1)
-    
-if args.start != None:
+if args.start is not None:
     syear = datetime.strptime(args.start, "%Y-%m-%d").date()
-    
-params['reportMonth'] = list_of_Months[month_int]
-params['reportYear'] = year
-smonth = date(year, month_int+1, 1)
-emonthd = smonth + relativedelta(months=1) + relativedelta(days=-1)
-#emonthd = date(year, month_int+2,1) - timedelta(days=1)
-emonth = smonth + relativedelta(months=1)
-#emonth = date(year, month_int + 2, 1)
 
-if month_int < 3:
-    tmonth = emonth - relativedelta(months= month_int+1)
-else:
-    tmonth = emonth - relativedelta(months = 3)
-    
-print(f"smonth {smonth} -- emonthd {emonthd} -- emonth {emonth} -- tmonth {tmonth}")
-params['reportPeriod'] = f"{smonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+smonth  = date(year, month_int + 1, 1)
+emonthd = smonth + relativedelta(months=1, days=-1)
+emonth  = smonth + relativedelta(months=1)
+tmonth  = (emonth - relativedelta(months=month_int + 1)
+           if month_int < 3
+           else emonth - relativedelta(months=3))
 
-if month_int < 3:
-    params['reportPeriodTrimester'] = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
-else:
-    params['reportPeriodTrimester'] = f"{tmonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
-
-params['reportPeriodYear'] = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
-params['ndays'] = (emonth-smonth).days
-params['ndaysTrimester'] = (emonth - tmonth).days
-params['ndaysYear'] = (emonth - syear).days
-
-tag_month={
-    '': [month,],
-    'Trimester': None,
-    'Year': list_of_months_abr[:month_int+1]
+# Logic inside a dict to make this more redable.
+tag_month = {
+    "":          [month],
+    "Trimester": (MONTHS_ABR[:month_int + 1]
+                  if month_int < 3
+                  else MONTHS_ABR[month_int - 2 : month_int + 1]),
+    "Year":      MONTHS_ABR[:month_int + 1],
 }
 
-if month_int < 3:
-    tag_month['Trimester'] = list_of_months_abr[:month_int+1]
-else:
-    tag_month['Trimester'] = list_of_months_abr[month_int-2:month_int+1]
-    
-outfilename = "params.tex"
+outfilename = args.outfile or "params.tex"
+outfile_path = Path(f"{OUTDIR}/{outfilename}")
+outfile_path.parent.mkdir(parents=True, exist_ok=True)
 
-if args.outfile != None:
-    outfilename = args.outfile
-    
-outfile_path = Path(f"{OUTDIR}/{outfilename}")  
+# Pre compute date values
+ndays      = (emonth - smonth).days
+ndays_tri  = (emonth - tmonth).days
+ndays_year = (emonth - syear).days
 
-if not outfile_path.is_file():
-    outfile_path.parent.mkdir(parents=True, exist_ok=True)
-    outfile_path.write_text("", encoding='utf-8') 
+report_period     = f"{smonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+report_period_tri = (f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
+                     if month_int < 3
+                     else f"{tmonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}")
+report_period_yr  = f"{syear.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}"
 
-wfile = open(f"{outfile_path}","w+")
+# This way it can be mapped in the SQL with the right types and values.
+# Not all of them are here because some will be create by the SQL query with the right values.
+PARAM_ORDER = OrderedDict([
+    # ── Report dates ──────────────────────────────────────
+    ("reportPeriod",              ("STR",   report_period)),
+    ("reportPeriodTrimester",     ("STR",   report_period_tri)),
+    ("reportPeriodYear",          ("STR",   report_period_yr)),
+    ("reportMonth",               ("STR",   MONTHS_FULL[month_int])),
+    ("reportYear",                ("INT",   str(year))),
+    # ── Machine config ────────────────────────────────────
+    ("armnodes",                  ("INT",   "1632")),
+    ("amdnodes",                  ("INT",   "500")),
+    ("gpunodes",                  ("INT",   "132")),
+    ("percentaviail",             ("DBL",   "0.8")),
+    ("eurohpcavail",              ("DBL",   "0.35")),
+    # ── Days ──────────────────────────────────────────────
+    ("ndays",                     ("INT",   str(ndays))),
+    # ── Monthly: hours (computed) ─────────────────────────
+    ("armusedhours",              ("DBL",   None)),
+    ("amdusedhours",              ("DBL",   None)),
+    ("gpuusedhours",              ("DBL",   None)),
+    # ── Monthly: EuroHPC hours (computed) ─────────────────
+    ("gpuusedhoursEuroHPC",       ("DBL",   None)),
+    ("amdusedhoursEuroHPC",       ("DBL",   None)),
+    ("armusedhoursEuroHPC",       ("DBL",   None)),
+    # ── Monthly: jobs (computed) ──────────────────────────
+    ("armJobs",                   ("INT",   None)),
+    ("amdJobs",                   ("INT",   None)),
+    ("gpuJobs",                   ("INT",   None)),
+    # ── Monthly: completed/failed (computed) ──────────────
+    ("gpuCompletedJobs",          ("INT",   None)),
+    ("gpuFailedJobs",             ("INT",   None)),
+    ("armCompletedJobs",          ("INT",   None)),
+    ("amdCompletedJobs",          ("INT",   None)),
+    ("amdFailedJobs",             ("INT",   None)),
+    ("armFailedJobs",             ("INT",   None)),
+    # ── Monthly: EuroHPC jobs (computed) ──────────────────
+    ("gpuJobsEuroHPC",            ("INT",   None)),
+    ("amdJobsEuroHPC",            ("INT",   None)),
+    ("armJobsEuroHPC",            ("INT",   None)),
+    # ── Trimester days ────────────────────────────────────
+    ("ndaysTrimester",            ("INT",   str(ndays_tri))),
+    # ── Trimester: completed/failed (computed) ────────────
+    ("gpuCompletedJobsTrimester", ("INT",   None)),
+    ("gpuFailedJobsTrimester",    ("INT",   None)),
+    ("armCompletedJobsTrimester", ("INT",   None)),
+    ("amdCompletedJobsTrimester", ("INT",   None)),
+    ("amdFailedJobsTrimester",    ("INT",   None)),
+    ("armFailedJobsTrimester",    ("INT",   None)),
+    # ── Trimester: hours (computed) ───────────────────────
+    ("armusedhoursTrimester",     ("DBL",   None)),
+    ("amdusedhoursTrimester",     ("DBL",   None)),
+    ("gpuusedhoursTrimester",     ("DBL",   None)),
+    # ── Trimester: jobs (computed) ────────────────────────
+    ("armJobsTrimester",          ("INT",   None)),
+    ("amdJobsTrimester",          ("INT",   None)),
+    ("gpuJobsTrimester",          ("INT",   None)),
+    # ── Trimester: EuroHPC hours (computed) ───────────────
+    ("gpuusedhoursEuroHPCTrimester", ("DBL", None)),
+    ("amdusedhoursEuroHPCTrimester", ("DBL", None)),
+    ("armusedhoursEuroHPCTrimester", ("DBL", None)),
+    # ── Trimester: EuroHPC jobs (computed) ────────────────
+    ("gpuJobsEuroHPCTrimester",   ("INT",   None)),
+    ("amdJobsEuroHPCTrimester",   ("INT",   None)),
+    ("armJobsEuroHPCTrimester",   ("INT",   None)),
+    # ── Year days ─────────────────────────────────────────
+    ("ndaysYear",                 ("INT",   str(ndays_year))),
+    # ── Year: completed/failed (computed) ─────────────────
+    ("gpuCompletedJobsYear",      ("INT",   None)),
+    ("gpuFailedJobsYear",         ("INT",   None)),
+    ("armCompletedJobsYear",      ("INT",   None)),
+    ("amdCompletedJobsYear",      ("INT",   None)),
+    ("amdFailedJobsYear",         ("INT",   None)),
+    ("armFailedJobsYear",         ("INT",   None)),
+    # ── Year: hours (computed) ────────────────────────────
+    ("armusedhoursYear",          ("DBL",   None)),
+    ("amdusedhoursYear",          ("DBL",   None)),
+    ("gpuusedhoursYear",          ("DBL",   None)),
+    # ── Year: jobs (computed) ─────────────────────────────
+    ("armJobsYear",               ("INT",   None)),
+    ("amdJobsYear",               ("INT",   None)),
+    ("gpuJobsYear",               ("INT",   None)),
+    # ── Year: EuroHPC jobs (computed) ─────────────────────
+    ("gpuJobsEuroHPCYear",        ("INT",   None)),
+    ("amdJobsEuroHPCYear",        ("INT",   None)),
+    ("armJobsEuroHPCYear",        ("INT",   None)),
+    # ── Year: EuroHPC hours (computed) ────────────────────
+    ("gpuusedhoursEuroHPCYear",   ("DBL",   None)),
+    ("amdusedhoursEuroHPCYear",   ("DBL",   None)),
+    ("armusedhoursEuroHPCYear",   ("DBL",   None)),
+    # ── LaTeX formulas ────────────────────────────────────
+    ("monthhours",                ("LATEX", r"{\inteval{\ndays * 24}}")),
+    ("hoursTrimester",            ("LATEX", r"{\inteval{\ndaysTrimester * 24}}")),
+    ("hoursYear",                 ("LATEX", r"{\inteval{\ndaysYear * 24}}")),
+])
+
+# Instead of hardcoded now this permutes and makes all the right names and tags
+METRIC_MAP = {}
+for key, (dtype, default) in PARAM_ORDER.items():
+    if default is not None:
+        continue  # static value, no need to compute
+
+    # Parse the key to find cluster, metric name, window tag
+    k = key
+    tag = ""
+    for t in ["Trimester", "Year"]:
+        if k.endswith(t):
+            tag = t
+            k = k[: -len(t)]
+            break
+
+    cluster = None
+    metric  = None
+    for cl in ["gpu", "amd", "arm"]:
+        if k.startswith(cl):
+            cluster = cl.upper()
+            remainder = k[len(cl):]
+
+            if remainder == "usedhours":
+                metric = "used_hours"
+            elif remainder == "usedhoursEuroHPC":
+                metric = "eurohpc_hours"
+            elif remainder == "Jobs":
+                metric = "jobs_no_local"
+            elif remainder == "CompletedJobs":
+                metric = "completed_jobs"
+            elif remainder == "FailedJobs":
+                metric = "failed_jobs"
+            elif remainder == "JobsEuroHPC":
+                metric = "eurohpc_jobs"
+            break
+
+    if cluster and metric:
+        METRIC_MAP[key] = (cluster, metric, tag)
+
+# File search
+all_months_needed = set()
+for ms in tag_month.values():
+    all_months_needed.update(ms)
+
+walk_start = min(syear, tmonth, smonth)
+cur = date(walk_start.year, walk_start.month, 1)
+years_months: dict[int, list[str]] = {}
+while cur <= emonthd:
+    m_abr = cur.strftime("%b")
+    if m_abr in all_months_needed:
+        years_months.setdefault(cur.year, []).append(m_abr)
+    cur += relativedelta(months=1)
+
+csv_paths: list[str] = []
+for yr, mlist in years_months.items():
+    year_dir = f"{DATADIR}/{yr}"
+    if not os.path.isdir(year_dir):
+        continue
+    for f in os.listdir(year_dir):
+        month_file = "_".join(f.split("_")[1:]).split(".")[0]
+        if month_file in mlist:
+            csv_paths.append(f"{year_dir}/{f}")
+            print(f"  Queued: {f}  (month={month_file})")
+
+if not csv_paths:
+    sys.exit("ERROR: No data files found.")
 
 
-# # Spark Part
+spark = (
+    SparkSession.builder
+    .master("local[4]")
+    .config("spark.eventLog.enabled", "true")
+    .config("spark.eventLog.dir", SPARK_EVENT_LOG_DIR)
+    .config("spark.sql.shuffle.partitions", "4")
+    .getOrCreate()
+)
+
+window_rows = [(tag, m) for tag, ms in tag_month.items() for m in ms]
+spark.createDataFrame(window_rows, schema=["window_tag", "period_month"]) \
+     .createOrReplaceTempView("time_windows")
+
+# Struct that match the CSV
+schema = T.StructType([
+    T.StructField("JobID",         T.StringType(),  True),
+    T.StructField("JobIDRaw",      T.StringType(),  True),
+    T.StructField("ElapsedRaw",    T.IntegerType(), True),
+    T.StructField("Account",       T.StringType(),  True),
+    T.StructField("AllocCPUS",     T.IntegerType(), True),
+    T.StructField("CPUTimeRAW",    T.LongType(),    True),
+    T.StructField("NNodes",        T.IntegerType(), True),
+    T.StructField("AllocNodes",    T.IntegerType(), True),
+    T.StructField("NCPUS",         T.IntegerType(), True),
+    T.StructField("Partition",     T.StringType(),  True),
+    T.StructField("TotalCPU",      T.StringType(),  True),
+    T.StructField("User",          T.StringType(),  True),
+    T.StructField("ExitCode",      T.StringType(),  True),
+    T.StructField("State",         T.StringType(),  True),
+    T.StructField("Reservation",   T.StringType(),  True),
+    T.StructField("ReservationId", T.StringType(),  True),
+    T.StructField("AllocTRES",     T.StringType(),  True),
+])
+
+(spark.read
+     .option("sep", "|")
+     .csv(csv_paths, schema=schema, header=True)
+     .select("ElapsedRaw", "Account", "AllocCPUS", "NNodes",
+             "Partition", "State", "AllocTRES")
+     .withColumn("Period", F.lit(month))
+     .createOrReplaceTempView("raw_data"))
+
+print("raw_data loaded")
 
 
-# Extracting the data from params['reportPeriod'] = f"{smonth.strftime('%d/%m/%Y')} - {emonthd.strftime('%d/%m/%Y')}":
+spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW enriched AS
+    SELECT *,
+           (ElapsedRaw * VNodes) AS totalJobSeconds
+    FROM (
+        SELECT
+            ElapsedRaw, Account, AllocCPUS, NNodes,
+            Partition, State, AllocTRES, Period,
 
-start_period: date = datetime.strptime(params['reportPeriod'].split(" - ")[0], "%d/%m/%Y").date()
-end_period: date = datetime.strptime(params['reportPeriod'].split(" - ")[1], "%d/%m/%Y").date()
-
-years_to_process_months: dict[int, list[str]] = {} #year: [months_to_process]
-
-current_iteration = date(start_period.year, start_period.month, 1)
-while current_iteration <= end_period:
-    
-    if current_iteration.year not in years_to_process_months:
-        years_to_process_months[current_iteration.year] = []
-        
-    m_abr:str = current_iteration.strftime('%b')
-    years_to_process_months[current_iteration.year].append(m_abr)
-    
-    current_iteration += relativedelta(months=1)
-
-"""
-print("PARAMS:")
-print(f"Start period: {start_period} -- End period: {end_period}")
-for year, months in years_to_process_months.items():
-    print(f"Year: {year} - Months: {months}")
-"""
-    
-
-print("FIND SPARK")
-print(findspark.find())
-
-sc = (SparkSession.builder
-      .master("local[*]")
-      .config("spark.eventLog.enabled", "true")
-      .config("spark.eventLog.dir", f"{SPARK_EVENT_LOG_DIR}")
-      #.config("executor.memory", "4g")
-      #.config("num.executors", "4")
-      .config("spark.jars.packages", "io.dataflint:dataflint-spark4_2.13:0.8.5")
-      .config("spark.plugins", "io.dataflint.spark.SparkDataflintPlugin")
-      .getOrCreate()
-      )
-
-
-nd = None
-for year, months in years_to_process_months.items():
-
-    for root, dirs, files in os.walk(f"{DATADIR}/{year}"):  
-    
-        for f in files:
-        
-            month_file = "_".join(f.split("_")[1:]).split(".")[0]
-        
-            print(f"Checking file: {f} for month: {month_file} in months: {months}")
-            
-            if month_file in months:
-                full_path = f"{DATADIR}/{year}/{f}"
-                
-                print(f"Process: {month_file} in {full_path}")
-                
-                #data = sc.read.option("delimiter","|").csv(full_path, inferSchema=True, header=True)
-                
-                data = sc.read.option("delimiter","|")\
-                    .csv(f'{DATADIR}/{year}/{f}', 
-                         inferSchema = True, 
-                         header = True)\
-                    .select("ElapsedRaw", "Account", "AllocCPUS", "NNodes", "Partition", "State", "AllocTRES")
-                
-                data = data.withColumn('Period', F.lit(month))
-                
-                if nd is None:
-                    nd = data
-                else:
-                    nd = nd.union(data)
-
-tag = ""
-
-#nd.describe()
-#adicionar coluna cluster com valores ARM, AMD, GPU
-#Adicionar coluna Agency com valores FCT, EHPC, LOCAL
-#Adicionar coluna NNodes com o numero de nodos alocados por causa de os nó GPU não ser exclusivo
-#Forma do calcular os nós usados nos jobs com GPU
-#Adicionar coluna totalJobSeconds = ElapsedRaw * NNodes
-
-
-# SQL Version:
-nd.createOrReplaceTempView("prune_data")
-
-query = """--sql
-    WITH calculated_cols AS (
-        SELECT 
-            -- Original Columns
-            ElapsedRaw, Account, AllocCPUS, NNodes, Partition, State, AllocTRES, Period,
-            
-            -- EState: Cleanup the CANCELLED state suffix
             regexp_replace(State, 'CANCELLED(.*)', 'CANCELLED') AS EState,
-            
-            -- COMPLETED: Binary status flag
-            CASE 
-                WHEN State = 'COMPLETED' THEN 'COMPLETED' 
-                ELSE 'FAILED' 
+
+            CASE WHEN State = 'COMPLETED' THEN 'COMPLETED'
+                 ELSE 'FAILED'
             END AS COMPLETED,
-            
-            -- cluster: Partition type mapping
-            CASE 
-                WHEN Partition LIKE '%arm%' THEN 'ARM'
-                WHEN Partition LIKE '%a100%' THEN 'GPU'
-                ELSE 'AMD' 
+
+            CASE WHEN Partition LIKE '%arm%'  THEN 'ARM'
+                 WHEN Partition LIKE '%a100%' THEN 'GPU'
+                 ELSE 'AMD'
             END AS cluster,
-            
-            -- Agency: Account and funding source mapping
-            CASE 
-                WHEN Account LIKE 'f%' THEN 'FCT'
-                WHEN Account LIKE 'ee%' THEN 'EHPC'
-                ELSE 'LOCAL' 
+
+            CASE WHEN Account LIKE 'f%'  THEN 'FCT'
+                 WHEN Account LIKE 'ee%' THEN 'EHPC'
+                 ELSE 'LOCAL'
             END AS Agency,
-            
-            -- OldVNodes: Rounding logic for CPU/32 ratio
-            CASE 
-                WHEN Partition LIKE '%a100%' THEN CEIL(AllocCPUS / 32)
-                ELSE NNodes 
-            END AS OldVNodes,
-            
-            -- VNodes: Complex GPU allocation logic (gres/gpu extraction)
-            CASE 
-                WHEN Partition LIKE '%a100%' THEN 
-                    CASE 
-                        WHEN AllocTRES IS NULL THEN NNodes
-                        WHEN AllocTRES RLIKE 'gres/gpu=([0-9]+)' 
-                            THEN CAST(regexp_extract(AllocTRES, 'gres/gpu=([0-9]+)', 1) AS INT)
-                        ELSE NNodes * 4 
-                    END
-                ELSE NNodes 
+
+            CASE WHEN Partition LIKE '%a100%'
+                 THEN CASE
+                          WHEN AllocTRES IS NULL THEN NNodes
+                          WHEN AllocTRES RLIKE 'gres/gpu=([0-9]+)'
+                               THEN CAST(regexp_extract(AllocTRES,
+                                         'gres/gpu=([0-9]+)', 1) AS INT)
+                          ELSE NNodes * 4
+                      END
+                 ELSE NNodes
             END AS VNodes
-        FROM prune_data
+        FROM raw_data
     )
-    SELECT 
-        *, 
-        -- Final calculation using the virtual VNodes column defined in the CTE
-        (ElapsedRaw * VNodes) AS totalJobSeconds
-    FROM calculated_cols
-"""
+""")
+spark.catalog.cacheTable("enriched")
+row_count = spark.sql("SELECT COUNT(*) AS n FROM enriched").collect()[0].n
+print(f"enriched cached ({row_count} rows)")
 
 
-## df_result = sc.sql(query)
-nd = sc.sql(query)
- 
-#nd.groupby('EState').count().show()
+spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW metrics AS
+    SELECT
+        w.window_tag,
+        e.cluster,
+
+        SUM(CASE WHEN e.Agency != 'LOCAL' THEN 1 ELSE 0 END)        AS jobs_no_local,
+        SUM(CASE WHEN e.COMPLETED = 'COMPLETED' THEN 1 ELSE 0 END)  AS completed_jobs,
+        SUM(CASE WHEN e.COMPLETED = 'FAILED'    THEN 1 ELSE 0 END)  AS failed_jobs,
+
+        COALESCE(CAST(SUM(CASE WHEN e.Agency != 'LOCAL'
+                          THEN e.totalJobSeconds END) AS DOUBLE) / 3600.0, 0.0)   AS used_hours,
+
+        SUM(CASE WHEN e.Agency = 'EHPC' THEN 1 ELSE 0 END)          AS eurohpc_jobs,
+        COALESCE(CAST(SUM(CASE WHEN e.Agency = 'EHPC'
+                          THEN e.totalJobSeconds END) AS DOUBLE) / 3600.0, 0.0)   AS eurohpc_hours
+
+    FROM enriched e
+    JOIN time_windows w ON e.Period = w.period_month
+    GROUP BY w.window_tag, e.cluster
+""")
+
+#spark.sql("SELECT * FROM metrics").show(50, truncate=False)
+print("metrics created")
+
+registry_rows = []   # (pos, param_key, dtype, val_element_or_None)
+for pos, (key, (dtype, default)) in enumerate(PARAM_ORDER.items()):
+    registry_rows.append((pos, key, dtype, default))
+
+registry_schema = T.StructType([
+    T.StructField("pos",       T.IntegerType()),
+    T.StructField("param_key", T.StringType()),
+    T.StructField("dtype",     T.StringType()),
+    T.StructField("static_val", T.StringType()),   # NULL for computed
+])
+spark.createDataFrame(registry_rows, schema=registry_schema) \
+     .createOrReplaceTempView("registry_skeleton")
+
+computed_rows = []  # (param_key, cluster, metric_col, window_tag)
+for key, (cluster, metric, tag) in METRIC_MAP.items():
+    computed_rows.append((key, cluster, metric, tag))
+
+computed_schema = T.StructType([
+    T.StructField("param_key",  T.StringType()),
+    T.StructField("cluster",    T.StringType()),
+    T.StructField("metric_col", T.StringType()),
+    T.StructField("window_tag", T.StringType()),
+])
+spark.createDataFrame(computed_rows, schema=computed_schema) \
+     .createOrReplaceTempView("computed_lookup")
+
+spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW param_registry AS
+    SELECT
+        r.pos,
+        r.param_key,
+        r.dtype,
+        ARRAY(
+            CASE
+                -- Static value: already known
+                WHEN r.static_val IS NOT NULL
+                    THEN r.static_val
+
+                -- INT metrics: cast to int then string
+                WHEN cl.metric_col = 'jobs_no_local'
+                    THEN CAST(CAST(m.jobs_no_local AS INT) AS STRING)
+                WHEN cl.metric_col = 'completed_jobs'
+                    THEN CAST(CAST(m.completed_jobs AS INT) AS STRING)
+                WHEN cl.metric_col = 'failed_jobs'
+                    THEN CAST(CAST(m.failed_jobs AS INT) AS STRING)
+                WHEN cl.metric_col = 'eurohpc_jobs'
+                    THEN CAST(CAST(m.eurohpc_jobs AS INT) AS STRING)
+
+                -- DBL metrics: placeholder, real value in val_dbl
+                WHEN cl.metric_col IN ('used_hours', 'eurohpc_hours')
+                    THEN '__DBL__'
+
+                ELSE '0'
+            END
+        ) AS val,
+
+        -- Raw double for precision-sensitive values
+        CASE
+            WHEN cl.metric_col = 'used_hours'    THEN m.used_hours
+            WHEN cl.metric_col = 'eurohpc_hours' THEN m.eurohpc_hours
+            ELSE NULL
+        END AS val_dbl
+
+    FROM registry_skeleton r
+
+    JOIN computed_lookup cl
+        ON r.param_key = cl.param_key
+
+    JOIN metrics m
+        ON  cl.cluster    = m.cluster
+        AND cl.window_tag = m.window_tag
+
+    ORDER BY r.pos
+""")
 
 
+#spark.sql("SELECT * FROM param_registry").show(100, truncate=False)
+print("param_registry built")
 
-print(f"1. {nd.count()}")
-nd.show()
+rows = spark.sql("""
+    SELECT pos, param_key, dtype, val, val_dbl
+    FROM param_registry
+    ORDER BY pos
+""").collect()
 
-cl = ['ARM', 'AMD', 'GPU']
+tex_lines = []
+for row in rows:
+    key = row.param_key
+    if row.val_dbl is not None:
+        value = str(row.val_dbl)
+        print(f"  DBL  {key} = {value}  (raw: {row.val_dbl!r})")
+    else:
+        value = row.val[0]
+    tex_lines.append(f"\\def\\{key}{{{value}}}")
 
- 
-# # Write to the file:
+with open(outfile_path, "w", encoding="utf-8") as wf:
+    wf.write("\n".join(tex_lines) + "\n")
 
-
-for tag,months in tag_month.items():
-    print(f"{tag} {months}")
-    hours = dict()
-    jobs = dict()
-    completed = nd.filter(F.col('Period').isin(months)).groupby( 'COMPLETED', 'cluster').count().collect()
-    msg =''
-    for row in completed:
-        print(f"ROW: {row}")
-        if row.COMPLETED == 'COMPLETED':
-            params[f"{row.cluster.lower()}CompletedJobs{tag}"] = row.asDict()['count']
-            msg = f"\def\{row.cluster.lower()}CompletedJobs{tag}{{{row.asDict()['count']}}}\n"
-        else:
-            params[f"{row.cluster.lower()}FailedJobs{tag}"] = row.asDict()['count']
-            msg = f"\def\{row.cluster.lower()}FailedJobs{tag}{{{row.asDict()['count']}}}\n"
-        print(f"MSG: {tag} {msg}")
-    #ignoring local consumed hours
-    
-    for c in cl:
-        #hours[c] = nd.filter(F.col('Period').isin(months)).groupby("cluster").sum().filter(F.col("cluster") == c).collect()[0].asDict()['sum(ElapsedRaw)']
-        hours[c] = \
-        nd.filter(F.col("Agency") != 'LOCAL').filter(F.col('Period').isin(months))\
-            .groupby("cluster").sum().filter(F.col("cluster") == c)\
-            .collect()[0].asDict()['sum(totalJobSeconds)']
-        print(f" {months} HOURS {c} {hours[c]}")
-        
-    #ignoring local consumed hours
-    for row in nd.filter(F.col("Agency") != 'LOCAL').filter(F.col('Period').isin(months))\
-            .groupby("cluster").count().collect():
-        print(f"ROW jobs: {row}")
-        r = row.asDict()
-        jobs[r['cluster']] = r['count']
-    print(f"JOBS: {jobs}")
-    
-    for k, v in hours.items():
-        params[f"{k.lower()}usedhours{tag}"] = v / 3600
-        msg = f"\def\{k.lower()}usedhours{tag}{{{v / 3600}}}\n"
-        print(f"HOURS {tag} {msg}")
-        
-    for k, v in jobs.items():
-        params[f"{k.lower()}Jobs{tag}"] = v
-        msg = f"\def\{k.lower()}Jobs{tag}{{{v}}}\n"
-        print(f"JOBS {tag} {msg}")
-        
-    for row in (nd.filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster'])
-            .count().orderBy('Agency').filter(F.col("Agency") == 'EHPC').collect()):
-        params[f"{row.cluster.lower()}JobsEuroHPC{tag}"] = row.asDict()['count']
-        msg = f"\def\{row.cluster.lower()}JobsEuroHPC{tag}{{{row.asDict()['count']}}}\n"
-        print(msg)
-        
-    rows = (nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months))
-            .groupby(['Agency', 'cluster']).sum().collect())
-    for row in rows:
-    #for row in nd.filter(F.col("Agency") == 'EHPC').filter(F.col('Period').isin(months)).groupby(['Agency', 'cluster']).sum().collect():
-        #print(f"EHPC {row} --> {row.cluster.lower()}usedhoursEuroHPC{tag}")
-        params[f"{row.cluster.lower()}usedhoursEuroHPC{tag}"] = row.asDict()['sum(totalJobSeconds)'] / 3600
-        msg = f"\def\{row.cluster.lower()}usedhoursEuroHPC{tag}{{{row.asDict()['sum(totalJobSeconds)'] / 3600}}}\n"
-        print(msg)
-        
-#wfile.write("%%%%%%%%%%%%%%%%%%%%%%%%\n")
+print(f"\n✓ Wrote {len(tex_lines)} LaTeX defs → {outfile_path}")
 
 
-## This is the real file writing:
-for k, v in params.items():
-    msg = f"\def\{k}{{{v}}}\n"
-    wfile.write(msg)
-wfile.close()
-
-
-print("SPARK UI ACTIVE MODE")
-print(f"SPARK UI URL: {sc.sparkContext.uiWebUrl}")
-
+print(f"SPARK UI URL: {spark.sparkContext.uiWebUrl}")
 if SPARK_UI_ACTIVE_MODE:
     input("Press Enter to exit...")
 
-
+spark.catalog.uncacheTable("enriched")
+spark.stop()
