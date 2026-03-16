@@ -254,13 +254,22 @@ for yr, mlist in years_months.items():
 if not csv_paths:
     sys.exit("ERROR: No data files found.")
 
+JVM_FLAGS = (
+        " -XX:+UseParallelGC"
+        " -XX:+ParallelRefProcEnabled"
+        f" -XX:ActiveProcessorCount={NUM_CORES}"
+        " -XX:+UseNUMA"
+        " -XX:TieredStopAtLevel=1"
+    )
 
 spark = (
     SparkSession.builder
     .master(f"local[{NUM_CORES}]")
+    .config("spark.ui.enabled", "false")
     .config("spark.eventLog.enabled", "true")
     .config("spark.eventLog.dir", SPARK_EVENT_LOG_DIR)
     .config(f"spark.sql.shuffle.partitions", f"{NUM_CORES}")
+    .config("spark.sql.adaptive.enabled", "true")
     .getOrCreate()
 )
 
@@ -292,7 +301,7 @@ schema = T.StructType([
 (spark.read
      .option("sep", "|")
      .csv(csv_paths, schema=schema, header=True)
-     .select("ElapsedRaw", "Account", "AllocCPUS", "NNodes",
+     .select("ElapsedRaw", "Account", "NNodes",
              "Partition", "State", "AllocTRES")
      .withColumn("Period", F.lit(month))
      .createOrReplaceTempView("raw_data"))
@@ -302,11 +311,10 @@ print("raw_data loaded")
 
 spark.sql("""
     CREATE OR REPLACE TEMPORARY VIEW enriched AS
-    SELECT *,
-           (ElapsedRaw * VNodes) AS totalJobSeconds
+    SELECT Period, COMPLETED, cluster, Agency,(ElapsedRaw * VNodes) AS totalJobSeconds
     FROM (
         SELECT
-            ElapsedRaw, Account, AllocCPUS, NNodes,
+            ElapsedRaw, Account, NNodes,
             Partition, State, AllocTRES, Period,
 
             regexp_replace(State, 'CANCELLED(.*)', 'CANCELLED') AS EState,
