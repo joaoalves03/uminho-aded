@@ -1,6 +1,6 @@
 #!/bin/sh
 #SBATCH --time=00:05:00
-#SBATCH --partition=normal-arm
+#SBATCH --partition=dev-arm
 #SBATCH -A f202500010hpcvlabuminhoa
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -15,4 +15,4 @@ scontrol show hostname $SLURM_NODELIST
 
 source .venv/bin/activate
 
-python statsEHPC_v2_init.py -m Jan -y 2025
+time python statsEHPC_v2_init.py -m Jan -y 2025

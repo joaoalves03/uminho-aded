@@ -15,3 +15,10 @@ scontrol show hostname $SLURM_NODELIST
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+
+mkdir ./spark
+mkdir ./spark/outdir
+mkdir ./spark/sparkevents
+mkdir ./spark/sparkevents/local
+

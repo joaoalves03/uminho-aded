@@ -15,9 +15,15 @@ import pyspark.sql.functions as F
 import pyspark.sql.types as T
 
 # Directories 
+NUM_CORES = os.environ.get('SLURM_CPUS_PER_TASK', '4')
 CWD     = os.getcwd()
 #DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports'
-DATADIR = f"{CWD}/spark/datadir"
+#DATADIR = f"{CWD}/spark/datadir"
+
+DATADIR = '/projects/F202500010HPCVLABUMINHO/DataSets/Reports'
+if not (os.path.exists(DATADIR) and os.listdir(DATADIR)):
+    DATADIR = f"{CWD}/spark/datadir"
+
 OUTDIR  = f"{CWD}/spark/outdir"
 SPARK_EVENT_LOG_DIR = f"{CWD}/spark/sparkevents/local"
 
@@ -251,10 +257,10 @@ if not csv_paths:
 
 spark = (
     SparkSession.builder
-    .master("local[4]")
+    .master(f"local[{NUM_CORES}]")
     .config("spark.eventLog.enabled", "true")
     .config("spark.eventLog.dir", SPARK_EVENT_LOG_DIR)
-    .config("spark.sql.shuffle.partitions", "4")
+    .config(f"spark.sql.shuffle.partitions", f"{NUM_CORES}")
     .getOrCreate()
 )
 
@@ -427,10 +433,10 @@ spark.sql("""
 
     FROM registry_skeleton r
 
-    JOIN computed_lookup cl
+    LEFT JOIN computed_lookup cl
         ON r.param_key = cl.param_key
 
-    JOIN metrics m
+    LEFT JOIN metrics m
         ON  cl.cluster    = m.cluster
         AND cl.window_tag = m.window_tag
 
