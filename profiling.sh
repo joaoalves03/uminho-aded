@@ -9,6 +9,7 @@
 
 ml Python/3.13.5-GCCcore-14.3.0
 ml Java/17.0.6
+ml REMORA/2.0.0-gompi-2023a
 
 PROJECTDIR=$(pwd)
 LOCALDIR=/tmp/$SLURM_JOB_ID
@@ -46,7 +47,7 @@ export PATH=$VENV_DIR/bin:$PATH
 export PYSPARK_PYTHON=$VENV_DIR/bin/python3
 export PYSPARK_DRIVER_PYTHON=$VENV_DIR/bin/python3
 
-time numactl --physcpubind=0-$(($SLURM_CPUS_PER_TASK - 1)) --membind=0 \
+remora numactl --physcpubind=0-$(($SLURM_CPUS_PER_TASK - 1)) --membind=0 \
     $VENV_DIR/bin/python \
     $PROJECTDIR/statsEHPC_v2_init.py -m Jan -y 2025
 
