@@ -96,29 +96,6 @@ done
 
 echo "Done"
 
-echo "[INFO] Computing summary statistics..."
-awk -F',' '
-NR==1 { next }
-{
-    trial=$1; pid=$2; ttft=$3; decode=$4; tpot=$5; tokens=$6
-    throughput = (decode > 0) ? (tokens / (decode / 1000.0)) : 0
-    goodput = (ttft < 2000 && tpot < 200) ? 1 : 0
-    total++
-    good += goodput
-    sum_ttft += ttft
-    sum_tpot += tpot
-    sum_throughput += throughput
-}
-END {
-    print "---"
-    print "Requests:", total
-    printf "Avg TTFT:       %.1f ms\n", sum_ttft / total
-    printf "Avg TPOT:       %.1f ms\n", sum_tpot / total
-    printf "Avg Throughput: %.2f tokens/s\n", sum_throughput / total
-    printf "Goodput:        %.1f%%\n", (good / total) * 100
-}
-' results/results_$SLURM_JOB_ID.csv | tee results/summary_$SLURM_JOB_ID.txt
-
 kill $MONITOR_PID
 kill $SERVER_PID
 wait $SERVER_PID 2>/dev/null
