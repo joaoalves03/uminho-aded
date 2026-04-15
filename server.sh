@@ -3,7 +3,6 @@
 #SBATCH --account=F202500010HPCVLABUMINHOa
 #SBATCH --partition=normal-arm
 #SBATCH --nodes=1
-#SBATCH --exclude=cna[0001-0016]
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=48
 #SBATCH --time=00:30:00
