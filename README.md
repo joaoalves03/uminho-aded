@@ -80,7 +80,7 @@ All commands must be run from the **login node** of Deucalion, inside the `bench
 cd benchmark/
 ```
 
-### Make scripts executables:
+### Make scripts executables
 
 ```bash
 chmod +x submit.sh benchmark.sh
@@ -107,16 +107,16 @@ Uses the `llama-cpp-turboquant-openblas-native.sif` container and enables optimi
 
 ### Concurrency sweep
 
-Tests multiple levels of simultaneous requests to the llama.cpp server. Result directories get a `__cN` suffix:
+Tests multiple levels of simultaneous requests to the llama.cpp server. Result directories get a `N` suffix:
 
 ```bash
-./submit.sh --concurrency 1,4,8,16
+./submit.sh --concurrency 1,2,4,8
 ```
 
 ### Combining options
 
 ```bash
-./submit.sh --turbo --concurrency 1,4,8,16
+./submit.sh --turbo --concurrency 1,2,4,8
 ```
 
 ---
